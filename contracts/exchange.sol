@@ -11,7 +11,7 @@ contract TokenExchange is Ownable {
 
     // TODO: paste token contract address here
     // e.g. tokenAddr = 0x5FbDB2315678afecb367f032d93F642f64180aa3
-    address tokenAddr;                                  // TODO: paste token contract address here
+    address tokenAddr = 0x5FbDB2315678afecb367f032d93F642f64180aa3;                                  // TODO: paste token contract address here
     Token public token = Token(tokenAddr);                                
 
     // Liquidity pool for the exchange
@@ -106,7 +106,17 @@ contract TokenExchange is Ownable {
         external 
         payable
     {
-       /******* TODO: Implement this function *******/
+        uint ethAmount = msg.value;
+        uint tokenAmount = ethAmount;
+
+        uint shareAmount = ethAmount * total_shares / eth_reserves;
+        
+        require(token.transferFrom(msg.sender, address(this), tokenAmount));
+
+        lps[msg.sender] += shareAmount;
+        total_shares += shareAmount;
+        eth_reserves += ethAmount;
+        token_reserves += tokenAmount;
     }
 
 
@@ -116,7 +126,21 @@ contract TokenExchange is Ownable {
         public 
         payable
     {
-        /******* TODO: Implement this function *******/
+        require(amountETH > 0);
+        require(amountETH < eth_reserves);
+
+        uint shareAmount = amountETH * total_shares / eth_reserves;
+        require(shareAmount <= lps[msg.sender]);
+
+        uint tokenAmount = amountETH * token_reserves / eth_reserves;
+
+        payable(address(this)).transfer(amountETH);
+        require(token.transferFrom(address(this), msg.sender, amountETH));
+
+        lps[msg.sender] -= shareAmount;
+        total_shares -= shareAmount;
+        eth_reserves -= amountETH;
+        token_reserves -= tokenAmount;
     }
 
     // Function removeAllLiquidity: Removes all liquidity that msg.sender is entitled to withdraw
@@ -125,7 +149,20 @@ contract TokenExchange is Ownable {
         external
         payable
     {
-        /******* TODO: Implement this function *******/
+        uint userShares = lps[msg.sender];
+        require(userShares > 0);
+
+        uint totalEthAmount = userShares * eth_reserves / total_shares;
+        uint totalTokenAmount = userShares * token_reserves / total_shares;
+        require(totalEthAmount < eth_reserves);
+
+        payable(address(this)).transfer(totalEthAmount);
+        require(token.transferFrom(address(this), msg.sender, totalTokenAmount));
+
+        lps[msg.sender] = 0;
+        total_shares -= userShares;
+        eth_reserves -= totalEthAmount;
+        token_reserves -= totalTokenAmount;
     }
     /***  Define additional functions for liquidity fees here as needed ***/
 
@@ -138,7 +175,14 @@ contract TokenExchange is Ownable {
         external 
         payable
     {
-        /******* TODO: Implement this function *******/
+        require(amountTokens < token_reserves);
+        uint amountETH = eth_reserves * amountTokens / (token_reserves + amountTokens);
+
+        payable(address(this)).transfer(amountETH);
+        require(token.transferFrom(msg.sender, address(this), amountTokens));
+
+        eth_reserves += amountTokens;
+        token_reserves -= amountETH;
     }
 
 
@@ -150,6 +194,13 @@ contract TokenExchange is Ownable {
         external
         payable 
     {
-        /******* TODO: Implement this function *******/
+        uint amountETH = msg.value;
+        require(amountETH < eth_reserves);
+        uint amountTokens = token_reserves * amountETH / (eth_reserves + amountETH);
+        
+        require(token.transferFrom(address(this), msg.sender, amountTokens));
+
+        eth_reserves += amountETH;
+        token_reserves -= amountTokens;
     }
 }
