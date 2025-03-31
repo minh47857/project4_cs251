@@ -38,7 +38,7 @@ contract TokenExchange is Ownable {
     // Constant: x * y = k
     uint private k;
 
-    uint private multiplier = 10**5;
+    uint private multiplier = 10**23;
 
     constructor() {}
     
@@ -102,27 +102,35 @@ contract TokenExchange is Ownable {
 
     // Function addLiquidity: Adds liquidity given a supply of ETH (sent to the contract as msg.value).
     // You can change the inputs, or the scope of your function, as needed.
-    function addLiquidity() 
+    function addLiquidity(uint max_exchange_rate, uint min_exchange_rate) 
         external 
         payable
     {
         uint ethAmount = msg.value;
-        uint tokenAmount = ethAmount;
-
-        uint shareAmount = ethAmount * total_shares / eth_reserves;
+        require(eth_reserves > 0, "Pool not initialized");
         
-        require(token.transferFrom(msg.sender, address(this), tokenAmount));
+        uint currentRate = token_reserves * multiplier / eth_reserves;
+        console.log(eth_reserves, token_reserves, multiplier, currentRate);
+        console.log(max_exchange_rate, min_exchange_rate);
+        require(currentRate <= max_exchange_rate, "Price too high");
+        require(currentRate >= min_exchange_rate, "Price too low");
+
+        uint tokenAmount = ethAmount * token_reserves / eth_reserves;
+        uint shareAmount = ethAmount * total_shares / eth_reserves;
 
         lps[msg.sender] += shareAmount;
         total_shares += shareAmount;
         eth_reserves += ethAmount;
         token_reserves += tokenAmount;
+        k = token_reserves * eth_reserves;
+
+        require(token.transferFrom(msg.sender, address(this), tokenAmount), "not sufficient");
     }
 
 
     // Function removeLiquidity: Removes liquidity given the desired amount of ETH to remove.
     // You can change the inputs, or the scope of your function, as needed.
-    function removeLiquidity(uint amountETH)
+    function removeLiquidity(uint amountETH, uint max_exchange_rate, uint min_exchange_rate)
         public 
         payable
     {
@@ -131,21 +139,29 @@ contract TokenExchange is Ownable {
 
         uint shareAmount = amountETH * total_shares / eth_reserves;
         require(shareAmount <= lps[msg.sender]);
-
         uint tokenAmount = amountETH * token_reserves / eth_reserves;
 
-        payable(address(this)).transfer(amountETH);
-        require(token.transferFrom(address(this), msg.sender, amountETH));
+        require(token_reserves * multiplier / eth_reserves <= max_exchange_rate);
+        require(token_reserves * multiplier / eth_reserves >= min_exchange_rate);
+
+        uint ethReward  = amountETH * eth_fee_reserves / eth_reserves;
+        uint tokenReward = tokenAmount * token_fee_reserves / token_reserves;
 
         lps[msg.sender] -= shareAmount;
         total_shares -= shareAmount;
         eth_reserves -= amountETH;
         token_reserves -= tokenAmount;
+        eth_fee_reserves -= ethReward;
+        token_fee_reserves -= tokenReward;
+        k = token_reserves * eth_reserves;
+
+        payable(msg.sender).transfer(amountETH  + ethReward);
+        require(token.transfer(msg.sender, tokenAmount + tokenReward));
     }
 
     // Function removeAllLiquidity: Removes all liquidity that msg.sender is entitled to withdraw
     // You can change the inputs, or the scope of your function, as needed.
-    function removeAllLiquidity()
+    function removeAllLiquidity(uint max_exchange_rate, uint min_exchange_rate)
         external
         payable
     {
@@ -156,13 +172,22 @@ contract TokenExchange is Ownable {
         uint totalTokenAmount = userShares * token_reserves / total_shares;
         require(totalEthAmount < eth_reserves);
 
-        payable(address(this)).transfer(totalEthAmount);
-        require(token.transferFrom(address(this), msg.sender, totalTokenAmount));
+        require(token_reserves * multiplier / eth_reserves <= max_exchange_rate);
+        require(token_reserves * multiplier / eth_reserves >= min_exchange_rate);
+
+        uint ethReward  = totalEthAmount * eth_fee_reserves / eth_reserves;
+        uint tokenReward = totalTokenAmount * token_fee_reserves / token_reserves;
 
         lps[msg.sender] = 0;
         total_shares -= userShares;
         eth_reserves -= totalEthAmount;
         token_reserves -= totalTokenAmount;
+        eth_fee_reserves -= ethReward;
+        token_fee_reserves -= tokenReward;
+        k = token_reserves * eth_reserves;
+
+        payable(msg.sender).transfer(totalEthAmount + ethReward);
+        require(token.transfer(msg.sender, totalTokenAmount + tokenReward));
     }
     /***  Define additional functions for liquidity fees here as needed ***/
 
@@ -171,18 +196,23 @@ contract TokenExchange is Ownable {
 
     // Function swapTokensForETH: Swaps your token with ETH
     // You can change the inputs, or the scope of your function, as needed.
-    function swapTokensForETH(uint amountTokens)
+    function swapTokensForETH(uint amountTokens, uint max_exchange_rate)
         external 
         payable
     {
         require(amountTokens < token_reserves);
-        uint amountETH = eth_reserves * amountTokens / (token_reserves + amountTokens);
 
-        payable(address(this)).transfer(amountETH);
+        uint amountETH = amountTokens * eth_reserves / (token_reserves + amountTokens);
+        eth_fee_reserves += amountETH * swap_fee_numerator / swap_fee_denominator;
+        amountETH = amountETH * (swap_fee_denominator - swap_fee_numerator) / swap_fee_denominator;
+
+        require(token_reserves * multiplier / eth_reserves <= max_exchange_rate);
+
+        eth_reserves -= amountETH;
+        token_reserves += amountTokens;
+
+        payable(msg.sender).transfer(amountETH);
         require(token.transferFrom(msg.sender, address(this), amountTokens));
-
-        eth_reserves += amountTokens;
-        token_reserves -= amountETH;
     }
 
 
@@ -190,17 +220,26 @@ contract TokenExchange is Ownable {
     // Function swapETHForTokens: Swaps ETH for your tokens
     // ETH is sent to contract as msg.value
     // You can change the inputs, or the scope of your function, as needed.
-    function swapETHForTokens()
+    function swapETHForTokens(uint max_exchange_rate)
         external
         payable 
     {
         uint amountETH = msg.value;
         require(amountETH < eth_reserves);
-        uint amountTokens = token_reserves * amountETH / (eth_reserves + amountETH);
-        
-        require(token.transferFrom(address(this), msg.sender, amountTokens));
 
+        uint amountTokens = token_reserves * amountETH / (eth_reserves + amountETH);
+        token_fee_reserves += amountTokens * swap_fee_numerator / swap_fee_denominator; 
+        amountTokens = amountTokens * (swap_fee_denominator - swap_fee_numerator) / swap_fee_denominator;
+
+        require(token_reserves * multiplier / eth_reserves <= max_exchange_rate);
+        
         eth_reserves += amountETH;
         token_reserves -= amountTokens;
+
+        console.log(address(this), msg.sender, amountTokens, token_reserves);
+
+        console.log("Exchange token balance before:", token.balanceOf(msg.sender));
+        require(token.transfer(msg.sender, amountTokens));
+        console.log("Exchange token balance after:", token.balanceOf(msg.sender));
     }
 }

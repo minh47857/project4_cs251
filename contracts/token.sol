@@ -24,16 +24,12 @@ contract Token is Ownable, ERC20 {
     // Function mint: Create more of your tokens.
     // You can change the inputs, or the scope of your function, as needed.
     // Do not remove the onlyOwner modifier!
-    function mint(address account, uint amount) 
+    function mint(uint amount) 
         public 
         onlyOwner
     {
-        if(isDisable == false) {
-            _mint(account, amount);
-        }
-        /******* TODO: Implement this function *******/
-
-        disable_mint();
+        require(!isDisable, "token mint is disable");
+        _mint(msg.sender, amount);
     }
 
     // Function disable_mint: Disable future minting of your token.
